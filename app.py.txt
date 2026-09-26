@@ -1,0 +1,134 @@
+import streamlit as st
+import pandas as pd
+import os
+import urllib.parse
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib import colors
+
+# Initialize directories
+os.makedirs("catalogues", exist_ok=True)
+EXCEL_FILE = "master_inventory.xlsx"
+
+# Page Configuration
+st.set_page_config(page_title="Product Catalogue Manager", layout="wide", page_icon="📋")
+st.title("🇿🇦 Product Catalogue & PDF Generator")
+
+# Helper function to generate PDFs (returns the file path)
+def generate_pdf(category_name, df_filtered):
+    pdf_filename = f"catalogues/{category_name.lower().replace(' ', '_')}_catalogue.pdf"
+    doc = SimpleDocTemplate(pdf_filename, pagesize=letter, title=f"{category_name} Catalogue")
+    story = []
+    
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        'CatTitle', parent=styles['Heading1'], fontSize=22, textColor=colors.HexColor('#1A365D'), spaceAfter=15
+    )
+    cell_text = ParagraphStyle('CellText', parent=styles['Normal'], fontSize=9, leading=12)
+    cell_header = ParagraphStyle('CellHeader', parent=styles['Normal'], fontSize=10, bold=True, textColor=colors.white)
+    
+    story.append(Paragraph(f"PRODUCT CATALOGUE: {category_name.upper()}", title_style))
+    story.append(Spacer(1, 10))
+    
+    table_data = [[Paragraph("Image", cell_header), Paragraph("Product Details", cell_header), Paragraph("Price (ZAR)", cell_header)]]
+    
+    for _, row in df_filtered.iterrows():
+        if pd.notna(row.get('Image_Path')) and os.path.exists(str(row['Image_Path'])):
+            prod_img = Image(str(row['Image_Path']), width=55, height=55)
+        else:
+            prod_img = Paragraph("<b>[ No Image ]</b>", cell_text)
+            
+        details = f"<b>Code:</b> {row['Code']}<br/><b>Description:</b> {row['Description']}<br/><b>Barcode:</b> {row['Barcode']}"
+        price_val = f"<b>R {float(row['Price']):.2f}</b>"
+        
+        table_data.append([prod_img, Paragraph(details, cell_text), Paragraph(price_val, cell_text)])
+        
+    product_table = Table(table_data, colWidths=[70, 340, 100])
+    product_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1A365D')),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F7FAFC')]),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#E2E8F0')),
+        ('TOPPADDING', (0, 0), (-1, -1), 6),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+    ]))
+    story.append(product_table)
+    doc.build(story)
+    return pdf_filename
+
+# Load inventory file or create template if missing
+if not os.path.exists(EXCEL_FILE):
+    df_empty = pd.DataFrame(columns=['Code', 'Description', 'Barcode', 'Category', 'Price', 'Image_Path'])
+    df_empty.to_excel(EXCEL_FILE, index=False)
+
+df = pd.read_excel(EXCEL_FILE)
+
+# Sidebar - Inventory Data Management
+st.sidebar.header("📦 Add New Product")
+with st.sidebar.form("product_form", clear_on_submit=True):
+    new_code = st.text_input("Product Code")
+    new_desc = st.text_input("Description")
+    new_barcode = st.text_input("Barcode / SKU")
+    new_cat = st.text_input("Category")
+    new_price = st.number_input("Selling Price (ZAR)", min_value=0.0, step=0.50)
+    new_img = st.text_input("Image File Path / Name")
+    submit_btn = st.form_submit_button("Save Product to Database")
+    
+    if submit_btn and new_code and new_cat:
+        new_row = pd.DataFrame([{
+            'Code': new_code, 'Description': new_desc, 'Barcode': new_barcode,
+            'Category': new_cat, 'Price': new_price, 'Image_Path': new_img
+        }])
+        df = pd.concat([df, new_row], ignore_index=True)
+        df.to_excel(EXCEL_FILE, index=False)
+        st.sidebar.success(f"Product {new_code} added successfully!")
+        st.rerun()
+
+# Main Interface Layout
+col_left, col_right = st.columns([3, 2])
+
+with col_left:
+    st.subheader("📋 Current Inventory Records")
+    if df.empty:
+        st.info("Your inventory database is currently empty. Use the sidebar menu to populate products.")
+    else:
+        st.dataframe(df, use_container_width=True, hide_index=True)
+
+with col_right:
+    st.subheader("⚡ Export & Share Catalogues")
+    if not df.empty:
+        categories = df['Category'].dropna().unique()
+        selected_category = st.selectbox("Select a Category to Generate", options=categories)
+        
+        if selected_category:
+            filtered_df = df[df['Category'] == selected_category]
+            st.metric(label="Total Items In Category", value=len(filtered_df))
+            
+            # Step 1: Generate PDF Button
+            if st.button(f"Build {selected_category} PDF File"):
+                with st.spinner("Compiling layout layout..."):
+                    pdf_path = generate_pdf(selected_category, filtered_df)
+                    st.success(f"Success! Generated: `{pdf_path}`")
+                    
+                    # Step 2: Download File Option
+                    with open(pdf_path, "rb") as f:
+                        st.download_button(
+                            label="⬇️ Download PDF to device",
+                            data=f,
+                            file_name=os.path.basename(pdf_path),
+                            mime="application/pdf"
+                        )
+                    
+                    # Step 3: Quick Desktop Sharing Launchers
+                    st.write("---")
+                    st.markdown("#### 🔗 Quick Share Hooks")
+                    
+                    # WhatsApp Text Body formulation
+                    msg_text = f"Hi! Please find attached our latest {selected_category} catalog updates. You can preview file: {os.path.basename(pdf_path)}"
+                    wa_url = f"https://whatsapp.com{urllib.parse.quote(msg_text)}"
+                    st.markdown(f"[💬 Send Notification via WhatsApp Web]({wa_url})", unsafe_url_allowed=True)
+                    
+                    # Outlook Text Mailto formulation
+                    mail_url = f"mailto:?subject={urllib.parse.quote(f'{selected_category} Product Catalogue')}&body={urllib.parse.quote(msg_text)}"
+                    st.markdown(f"[✉️ Draft Document Email via Outlook / Mail]({mail_url})", unsafe_url_allowed=True)
