@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+*.pyo
+.vscode/
+.catalogues/
+images/
+*.xlsx
+.DS_Store
